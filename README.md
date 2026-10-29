@@ -120,6 +120,12 @@ get_all_for
 
 Get a list of client cookie values. On error, returns `nil` and an error message.
 
+A bare token such as `token` has an empty name and the value `token`.
+It is distinct from `token=`, which has the name `token` and an empty value.
+Use `get("")` or `get_all_for("")` to read nameless cookies. `get` and
+`get_all` return the last value for each name; `get_all_for` preserves all
+values in header order. Empty segments between semicolons are ignored.
+
 [Back to TOC](#table-of-contents)
 
 get_cookie_size
@@ -148,6 +154,8 @@ syntax: ok, err = cookie_obj:set({
 ```
 
 Set a cookie to client. This will add a new 'Set-Cookie' response header. `key` and `value` are required, all other fields are optional.
+An empty `key` writes a nameless cookie in bare-value form. A named cookie
+with an empty `value` retains the `name=` form.
 If the same cookie (whole cookie string, e.g. "Name=Bob; Expires=Wed, 09 Jun 2021 10:18:14 GMT; Max-Age=50; Domain=example.com; Path=/; Secure; HttpOnly; Partitioned;") has already been set, new cookie will be ignored.
 
 [Back to TOC](#table-of-contents)

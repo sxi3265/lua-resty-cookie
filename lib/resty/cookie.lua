@@ -5,6 +5,7 @@
 local type          = type
 local byte          = string.byte
 local sub           = string.sub
+local find          = string.find
 local format        = string.format
 local log           = ngx.log
 local ERR           = ngx.ERR
@@ -12,7 +13,6 @@ local WARN          = ngx.WARN
 local ngx_header    = ngx.header
 
 local EQUAL         = byte("=")
-local SEMICOLON     = byte(";")
 local SPACE         = byte(" ")
 local HTAB          = byte("\t")
 
@@ -29,7 +29,7 @@ end
 
 local _M = new_tab(0, 2)
 
-_M._VERSION = '0.01'
+_M._VERSION = '0.5.0'
 
 
 local function get_cookie_table(text_cookie)
@@ -39,68 +39,70 @@ local function get_cookie_table(text_cookie)
         return {}, {}
     end
 
-    local EXPECT_KEY    = 1
-    local EXPECT_VALUE  = 2
-    local EXPECT_SP     = 3
-
-    local n = 0
     local len = #text_cookie
+    local cookie_table = new_tab(0, 4)
+    local multiple_value_cookie_table = new_tab(0, 4)
+    local start = 1
 
-    for i=1, len do
-        if byte(text_cookie, i) == SEMICOLON then
-            n = n + 1
+    while start <= len do
+        local separator = find(text_cookie, ";", start, true) or (len + 1)
+        local last = separator - 1
+
+        while start <= last
+            and (byte(text_cookie, start) == SPACE
+                 or byte(text_cookie, start) == HTAB)
+        do
+            start = start + 1
         end
-    end
 
-    local cookie_table = new_tab(0, n + 1)
-    local multiple_value_cookie_table  = new_tab(0, n + 1)
+        while last >= start
+            and (byte(text_cookie, last) == SPACE
+                 or byte(text_cookie, last) == HTAB)
+        do
+            last = last - 1
+        end
 
-    local state = EXPECT_SP
-    local i = 1
-    local j = 1
-    local key, value
-
-    while j <= len do
-        if state == EXPECT_KEY then
-            if byte(text_cookie, j) == EQUAL then
-                key = sub(text_cookie, i, j - 1)
-                state = EXPECT_VALUE
-                i = j + 1
-            end
-        elseif state == EXPECT_VALUE then
-            if byte(text_cookie, j) == SEMICOLON
-                    or byte(text_cookie, j) == SPACE
-                    or byte(text_cookie, j) == HTAB
-            then
-                value = sub(text_cookie, i, j - 1)
-                cookie_table[key] = value
-                if not multiple_value_cookie_table[key] then
-                    multiple_value_cookie_table[key] = {}
+        if start <= last then
+            local equals
+            for i = start, last do
+                if byte(text_cookie, i) == EQUAL then
+                    equals = i
+                    break
                 end
-                table.insert(multiple_value_cookie_table[key], value)
-
-                key, value = nil, nil
-                state = EXPECT_SP
-                i = j + 1
             end
-        elseif state == EXPECT_SP then
-            if byte(text_cookie, j) ~= SPACE
-                and byte(text_cookie, j) ~= HTAB
-            then
-                state = EXPECT_KEY
-                i = j
-                j = j - 1
+            local key, value
+            if equals then
+                local key_end = equals - 1
+                while key_end >= start
+                    and (byte(text_cookie, key_end) == SPACE
+                         or byte(text_cookie, key_end) == HTAB)
+                do
+                    key_end = key_end - 1
+                end
+                key = sub(text_cookie, start, key_end)
+                local value_start = equals + 1
+                while value_start <= last
+                    and (byte(text_cookie, value_start) == SPACE
+                         or byte(text_cookie, value_start) == HTAB)
+                do
+                    value_start = value_start + 1
+                end
+                value = sub(text_cookie, value_start, last)
+            else
+                key = ""
+                value = sub(text_cookie, start, last)
             end
-        end
-        j = j + 1
-    end
 
-    if key ~= nil and value == nil then
-        cookie_table[key] = sub(text_cookie, i)
-        if not multiple_value_cookie_table[key] then
-            multiple_value_cookie_table[key] = {}
+            cookie_table[key] = value
+            local values = multiple_value_cookie_table[key]
+            if not values then
+                values = {}
+                multiple_value_cookie_table[key] = values
+            end
+            values[#values + 1] = value
         end
-        table.insert(multiple_value_cookie_table[key], sub(text_cookie, i))
+
+        start = separator + 1
     end
 
     return cookie_table, multiple_value_cookie_table
@@ -120,7 +122,8 @@ function _M.get(self, key)
         return nil, "no cookie found in the current request"
     end
     if self.cookie_table == nil then
-        self.cookie_table = get_cookie_table(self._cookie)
+        self.cookie_table, self.multiple_value_cookie_table =
+            get_cookie_table(self._cookie)
     end
 
     return self.cookie_table[key]
@@ -132,7 +135,8 @@ function _M.get_all(self)
     end
 
     if self.cookie_table == nil then
-        self.cookie_table = get_cookie_table(self._cookie)
+        self.cookie_table, self.multiple_value_cookie_table =
+            get_cookie_table(self._cookie)
     end
 
     return self.cookie_table
@@ -143,8 +147,8 @@ function _M.get_all_for(self, key)
         return nil, "no cookie found in the current request"
     end
     if self.multiple_value_cookie_table == nil then
-        local _, multiple_value_cookie_table = get_cookie_table(self._cookie)
-        self.multiple_value_cookie_table = multiple_value_cookie_table
+        self.cookie_table, self.multiple_value_cookie_table =
+            get_cookie_table(self._cookie)
     end
 
     return self.multiple_value_cookie_table[key]
@@ -177,7 +181,9 @@ local function bake(cookie)
         end
     end
 
-    local str = cookie.key .. "=" .. cookie.value
+    local pair = cookie.key == "" and cookie.value ~= "" and cookie.value
+        or cookie.key .. "=" .. cookie.value
+    local str = pair
         .. (cookie.expires and "; Expires=" .. cookie.expires or "")
         .. (cookie.max_age and "; Max-Age=" .. cookie.max_age or "")
         .. (cookie.domain and "; Domain=" .. cookie.domain or "")
